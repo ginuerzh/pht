@@ -19,8 +19,8 @@ type conn struct {
 func newConn(session *session) *conn {
 	conn := &conn{
 		session: session,
-		rTimer:  time.NewTimer(0),
-		wTimer:  time.NewTimer(0),
+		rTimer:  time.NewTimer(time.Hour * 65535),
+		wTimer:  time.NewTimer(time.Hour * 65535),
 		closed:  make(chan interface{}),
 	}
 	conn.rTimer.Stop()
@@ -44,7 +44,11 @@ func (conn *conn) Read(b []byte) (n int, err error) {
 	}
 
 	select {
-	case data := <-conn.session.rchan:
+	case data, ok := <-conn.session.rchan:
+		if !ok {
+			err = io.EOF
+			return
+		}
 		n = copy(b, data)
 		conn.rb = data[n:]
 	case <-conn.rTimer.C:
@@ -68,11 +72,14 @@ func (conn *conn) Write(b []byte) (n int, err error) {
 		return
 	}
 
+	data := make([]byte, len(b))
+	copy(data, b)
+
 	select {
-	case conn.session.wchan <- b:
+	case conn.session.wchan <- data:
 		n = len(b)
 	case <-conn.wTimer.C:
-		err = errors.New("read timeout")
+		err = errors.New("write timeout")
 	case <-conn.closed:
 		err = errors.New("connection is closed")
 	}
@@ -83,6 +90,7 @@ func (conn *conn) Write(b []byte) (n int, err error) {
 func (conn *conn) Close() error {
 	close(conn.closed)
 	close(conn.session.closed)
+	close(conn.session.wchan)
 	return nil
 }
 

@@ -1,8 +1,9 @@
 package pht
 
 import (
+	"bufio"
+	"encoding/base64"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"strings"
@@ -84,17 +85,34 @@ func (s *Server) pushHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := ioutil.ReadAll(r.Body)
+	br := bufio.NewReader(r.Body)
+	data, err := br.ReadString('\n')
 	if err != nil {
 		s.manager.DelSession(token)
+		close(session.rchan)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	data = strings.TrimSuffix(data, "\n")
+	if len(data) == 0 {
+		s.manager.DelSession(token)
+		close(session.rchan)
+		return
+	}
+
+	b, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		s.manager.DelSession(token)
+		close(session.rchan)
+		return
+	}
+
 	select {
 	case <-session.closed:
 		s.manager.DelSession(token)
 		return
-	case session.rchan <- data:
+	case session.rchan <- b:
 		w.WriteHeader(http.StatusOK)
 	case <-time.After(time.Second * 90):
 		s.manager.DelSession(token)
@@ -122,17 +140,24 @@ func (s *Server) pollHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+	if fw, ok := w.(http.Flusher); ok {
+		fw.Flush()
+	}
 
 	for {
 		select {
-		case <-session.closed:
-			s.manager.DelSession(token)
-			return
-		case data := <-session.wchan:
-			_, err := w.Write(data)
-			if err != nil {
+		case data, ok := <-session.wchan:
+			if !ok {
+				s.manager.DelSession(token)
+				return // session is closed
+			}
+			bw := bufio.NewWriter(w)
+			bw.WriteString(base64.StdEncoding.EncodeToString(data))
+			bw.WriteString("\n")
+			if err := bw.Flush(); err != nil {
 				return
 			}
+
 			if fw, ok := w.(http.Flusher); ok {
 				fw.Flush()
 			}

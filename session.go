@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	defaultRChanLen = 16
-	defaultWChanLen = 16
+	defaultRChanLen = 64
+	defaultWChanLen = 64
 )
 
 type session struct {
